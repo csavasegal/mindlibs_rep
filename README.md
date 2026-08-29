@@ -1,26 +1,18 @@
 # MindLibs repository
 This repository contains the code necessary to reproduce the figures from the manuscript: *Updated neural representations predict reinterpretation of ambiguous social scenes independent of gaze-linked visual resampling*.
 
-Folders are named for the analysis they perform, not the figure they produce, since
+Important info: 
+- Folders are named for the analysis they perform, not the figure they produce, since
 several scripts contribute to more than one figure. Which figure each script feeds is
 listed under Figure map below.
-
-Scripts are numbered in pipeline order, and that order runs across folders: `001` builds
-the dataframe every later script depends on, so the numbering matters more than the
-folder a script sits in.
-
+- Scripts are numbered in pipeline order, and that order runs across folders: `001` builds
+the dataframe every later script depends on
+- If you need any additional information that is not included in this code directory, please feel free to reach out to **Clara Sava-Segal** at 📧 [csava@dartmouth.edu](mailto:csava@dartmouth.edu).
+Raw MR data will be added on OpenNeuro and modifications will be made through the review process
 
 ## Requirements
 
 Used Python 3.7.9 and R 4.4.1.
-
-Python: `numpy`, `pandas`, `scipy`, `matplotlib`, `scikit-learn`, `statsmodels`, `tqdm`,
-`nibabel`, `nilearn`, `surfplot`, `brainspace`, `neuromaps`
-
-R: `lme4`, `lmerTest`, `marginaleffects`, `broom.mixed`, `nlme`, `MASS`, `tidyverse`
-(`dplyr`, `tidyr`, `purrr`, `ggplot2`), `sjPlot`, `ggstatsplot`, `ggeffects`, `ggpattern`,
-`ggh4x`, `ggside`, `ggsignif`, `ggtext`, `patchwork`, `cowplot`, `see`, `plyr`, `zeallot`,
-`Rcpp`
 
 Surface plotting in `003` and `006` downloads fsLR surfaces via `neuromaps` and the
 Schaefer parcellation via `brainspace` on first run.
@@ -40,7 +32,7 @@ One row per subject × Schaefer parcel × condition × stimulus (56 subjects × 
   trial and parcel. Viewing 1 and Viewing 2 come from a GLM generated via AFNI.
 - `Node_Number` — Schaefer-100 parcel (1–100)
 - `Condition` — `expt` (experimental) or `cont` (control)
-- `Subject`, `stim_file` — 
+- `Subject`, `stim_file` (images used, will be added ASAP)
 - behavioral and NLP columns — ratings, free-text responses, cosine similarities
 
 - can run `002` onward without any of the raw imaging data. `001` is included to show how `R_Value` was computed (converted into neural shifts down the line).
@@ -94,6 +86,4 @@ present as a commented-out alternative in the same chunk.
 
 ---
 
-If you need any additional information that is not included in this code directory, please feel free to reach out to **Clara Sava-Segal** at 📧 [csava@dartmouth.edu](mailto:csava@dartmouth.edu).
-Raw MR data will be added on OpenNeuro and modifications will be made through the review process
----
+
