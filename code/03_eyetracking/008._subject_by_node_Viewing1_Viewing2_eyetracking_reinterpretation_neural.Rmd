@@ -1,0 +1,1150 @@
+---
+title: "subject_by_node_Viewing1_Viewing2"
+output: html_document
+date: '2023-10-31'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(lme4)
+library(lmerTest)
+library(MASS)
+library(Rcpp)
+library(ggplot2)
+library(tidyverse)
+library(ggsignif)
+library(nlme)
+library(sjPlot)
+library(cowplot)
+library(ggside)
+library(patchwork)
+library(dplyr)
+library(ggh4x)
+library(ggeffects)
+
+source("../utils/run_lmer_functions.R")
+source("../utils/add_network_labels.R")
+
+```
+
+
+
+```{r}
+# Get and print the current working directory
+current_directory <- getwd()
+print(current_directory) 
+file_path <- paste(current_directory, '../../data/subject_by_node_Viewing1_Viewing2_subs_schaefer_rois.csv', sep = "/")
+data = read.csv(file_path)
+
+data$Condition <- as.factor(data$Condition)
+condCond_over_Expt<- c(-1,1)
+contrasts(data$Condition) <- cbind(condCond_over_Expt) #should be lower in Cont
+
+### Let's drop some motion files    
+motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
+
+data$Subject <- as.character(data$Subject)
+data$img <- as.character(data$stim_file)
+motion_summary$Subject <- as.character(motion_summary$sub)
+motion_summary$img <- as.character(motion_summary$img)
+
+# Filter only the high motion trials
+#high_motion <- subset(motion_summary, high_motion == 'True') #.2
+high_motion <- subset(motion_summary, mean_motion > 0.5)
+
+# Create keys for matching
+data$key_sub <- paste(data$sub, data$img, sep = "_")
+high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
+
+data$bad <- data$key_sub %in% high_motion_keys
+data_clean <- subset(data, bad == FALSE)
+data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
+
+
+data <- data_clean
+
+
+trials_over_threshold <- motion_summary %>%
+  group_by(sub) %>%
+  dplyr::summarise(n_over_threshold = sum(median_motion > 0.5, na.rm = TRUE))
+
+trials_over_threshold %>%
+  ungroup() %>%
+  summarise(
+    median_n = median(n_over_threshold),
+    min_n = min(n_over_threshold),
+    max_n = max(n_over_threshold),
+    mean_n = mean(n_over_threshold),
+    sd_n = sd(n_over_threshold)
+  )
+
+trials_over_threshold %>%
+  arrange(desc(n_over_threshold)) %>%
+  print(n = Inf)
+
+
+eyetracking_data <-read.csv("/Volumes/FinnLab/datasets/madlibs-eyetracking/results/combined-eye-tracking_behavioral_results_fmri_QCed_screensize_merge_iticorr_mindur100.csv")
+
+eyetracking_subset <- eyetracking_data %>%
+  rename(Subject = subject, stim_file = stimulus) %>%
+  dplyr::select(Subject, stim_file, mm_direction, mm_position, mm_duration, mm_shape, mm_length, dtw_shift, fixation_map_pearson_r, eyelink_hz, fixation_count_discrepancy)
+
+
+# Merge datasets
+data <- data %>%
+  left_join(eyetracking_subset, by = c("Subject", "stim_file"))
+
+```
+
+
+### set up
+```{r}
+data <- data %>%
+  mutate(
+    confidence = confidence / 100,
+    self = appraisal_SELF_cond1 / 100,
+    other = appraisal_OTHER_cond1 / 100
+  )
+
+# Step 3: Create reinterpretation value
+data <- data %>%
+  mutate(reinterpretation = confidence - self + other)
+
+data$neural_shift <- 1 - atanh(data$R_Value)
+data <- data[data$Subject != "sub-016",] #just a terrible tracking subject!!
+
+```
+
+
+
+# Edit here to choose the metric!
+```{r}
+gaze_choice = 'fixation_map_pearson_r'
+data$mm_mean5 <- data$fixation_map_pearson_r
+data$gaze_change <- 1 - data[[gaze_choice]]
+
+
+#In the Supplement!
+# mm_cols <- c('mm_shape')
+# gaze_choice = 'mm_mean5'
+# data$mm_mean5 <- data$mm_shape
+# data$gaze_change <- 1 - data[[gaze_choice]]
+
+
+data <- data[data$Condition=='expt',] #just experimental trials
+
+
+###############################################################################
+## GAZE SHIFT SCORE
+###############################################################################
+# One row per trial (collapse across nodes), drop trials with no shift score,
+# then z-score within subject.
+gaze_trial_level <- data %>%
+  distinct(Subject, stim_file, gaze_change) %>%
+  filter(!is.na(gaze_change)) %>%
+  group_by(Subject) %>%
+  mutate(gaze_z = as.numeric(scale(gaze_change))) %>%
+  ungroup() %>%
+  dplyr::select(Subject, stim_file, gaze_z)
+
+# Merge the trial-level gaze_z back onto the full node-level data
+data <- data %>%
+  dplyr::select(-any_of("gaze_z")) %>%
+  inner_join(gaze_trial_level, by = c("Subject", "stim_file"))
+
+
+```
+
+
+#Adding the network labels!
+```{r}
+
+data$semantic_distance <- 1 - data$cosine_sim_avg_inputs_BERT_context_miniLM_L6
+data <- data %>%
+  filter(!is.na(semantic_distance) & !is.nan(semantic_distance))
+data <- data %>%
+  filter(!is.na(gaze_z) & !is.nan(gaze_z))
+
+data_experimental <- data[data$Condition=='expt',]
+data <- add_schaefer_network_labels(data_experimental)
+
+```
+
+
+#plotting Fig. 3E
+```{r}
+
+node_experimental <- data[data$Node_Number=='1',]
+
+mod_main <- lmer(reinterpretation ~ gaze_z * poly(semantic_distance,3)+  (1+gaze_z|Subject) + (1|stim_file) , data = node_experimental)
+tab_model(mod_main)
+mod_main <- lmer(reinterpretation ~ gaze_z * semantic_distance+  (1+gaze_z|Subject) + (1|stim_file) , data = node_experimental)
+
+
+pred <- ggpredict(mod_main, c("gaze_z [-1, 0, 1]", "semantic_distance [.25, .5, .75]"))
+
+p <- ggplot(pred, aes(x = x, y = predicted,
+                       group = group, color = group,
+                       fill = group, linetype = group)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("black", "black", "black")) +
+  scale_fill_manual(values = c("black", "black", "black")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+  labs(y = NULL, x = NULL)+
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))+
+  ylim(0.40, 0.66)
+
+p <- p +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+
+
+ggsave(
+  paste0("../../results/eyetracking_plots/neural_gaze_behavioral_model_", gaze_choice, ".png"),
+  p, width = 3, height = 3, dpi = 300
+)
+
+
+p
+
+```
+
+
+
+#Fig. 4A
+```{r}
+
+network = 'DefaultB'
+net = data[data$Network_17N==network,]
+hist(net$semantic_distance)
+hist(net$gaze_change)
+net <- net %>%
+  filter(!is.na(neural_shift) & !is.na(reinterpretation) & !is.na(semantic_distance))
+
+model3 <- lmerTest::lmer(reinterpretation ~ neural_shift * gaze_z * poly(semantic_distance, 3) + ( 1+gaze_z|Subject) + (1|stim_file) + (1|Node_Number) , data = net, REML=TRUE)
+tab_model(model3)
+
+model3 <- lmerTest::lmer(reinterpretation ~ neural_shift * gaze_z * semantic_distance + ( 1+gaze_z|Subject) + (1|stim_file) + (1|Node_Number) , data = net, REML=TRUE)
+
+print(summary(model3))
+
+
+# Test the slope of neural_shift at specific values of gaze_z and semantic_distance
+slopes(model3,
+  variables = "neural_shift",
+  newdata = datagrid(
+    gaze_z            = c(-1, 0, 1),  #  low/mid/high gaze values
+    semantic_distance = c(0.25, 0.50, 0.75)  # 
+  )
+)
+
+hypotheses(slopes(model3,
+  variables = "neural_shift",
+  newdata = datagrid(
+    gaze_z = c(-1, 1),
+    semantic_distance = 0.75
+  )),
+  hypothesis = "b1 = b2"
+)
+
+
+pred <- ggpredict(model3, c("neural_shift", "gaze_z [-1,0,1]", "semantic_distance [0.25, 0.50, 0.75]"))
+
+
+p <- ggplot(pred, aes(x = x, y = predicted, 
+                      group = group, color = group, 
+                      fill = group, linetype = group)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
+  geom_line(size = .75) +
+  facet_wrap(~ facet, labeller = label_both) +  # 'facet' is the third variable in ggpredict output
+  scale_color_manual(values = c("#dc2e2c", "#dc2e2c", "#dc2e2c")) +
+  scale_fill_manual(values = c("#dc2e2c", "#dc2e2c", "#dc2e2c")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+  labs(y = "reinterpretation (pred.)", x = "neural shift", title = network) +
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p
+
+
+p 
+
+ggsave(
+  paste0(
+    "../../results/eyetracking_plots/",
+    "reinterpretation_reinterpretation_by_neural_gaze_semantic_distance_",
+    network, "_",
+    gaze_choice,
+    ".png"
+  ),
+  p,
+  width = 9,
+  height = 3,
+  dpi = 300
+)
+
+pred_high <- subset(pred, facet == "0.75")
+
+p_high <- ggplot(
+  pred_high,
+  aes(
+    x = x,
+    y = predicted,
+    group = group,
+    color = group,
+    fill = group,
+    linetype = group
+  )
+) +
+  geom_ribbon(
+    aes(ymin = conf.low, ymax = conf.high),
+    alpha = 0.15,
+    color = NA
+  ) +
+  geom_line(size = .75) +
+  scale_color_manual(values = c("#dc2e2c", "#dc2e2c", "#dc2e2c")) +
+  scale_fill_manual(values = c("#dc2e2c", "#dc2e2c", "#dc2e2c")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+  labs(
+    y = NULL,
+    x = NULL,
+  ) +
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))+
+  ylim(0.1, 1)
+p_high
+p_high <- p_high +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+
+ggsave(
+  paste0(
+    "../../results/eyetracking_plots/",
+    "reinterpretation_reinterpretation_by_neural_gaze_semantic_distance_HIGH_",
+    network, "_",
+    gaze_choice,
+    ".png"
+  ),
+  p_high,
+  width = 3,
+  height = 3,
+  dpi = 300
+)
+
+
+
+```
+
+
+# BOTH VISUAL NETWORKS COMBINED -- this is what is in the main manuscript! Change to be VisPeri or VisCent for the Supplement
+#Fig. 4B
+```{r}
+network = 'both_visual'
+
+
+net <- data[data$Network_17N %in% c("VisPeri", "VisCent"), ]
+
+
+model3 <- lmerTest::lmer(reinterpretation ~ neural_shift * gaze_z * poly(semantic_distance, 3) + ( 1 +gaze_z|Subject) + (1|stim_file) + (1|Node_Number) , data = net)
+tab_model(model3)
+
+model3 <- lmerTest::lmer(reinterpretation ~ neural_shift * gaze_z * semantic_distance + ( 1+gaze_z|Subject) + (1|stim_file) + (1|Node_Number) , data = net)
+tab_model(model3)
+
+
+print(summary(model3))
+
+
+library(ggeffects)
+pred <- ggpredict(model3, c("neural_shift","gaze_z [-1,0,1]","semantic_distance [0.25, 0.50, 0.75]"))
+
+pred <- ggpredict(model3, c("neural_shift", "gaze_z [-1, 0, 1]", "semantic_distance [0.25, 0.50, 0.75]"))
+
+p <- ggplot(pred, aes(x = x, y = predicted, 
+                      group = group, color = group, 
+                      fill = group, linetype = group)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
+  geom_line(size = .75) +
+  facet_wrap(~ facet, labeller = label_both) +  
+  scale_color_manual(values =  c("#744083", "#744083", "#744083")) +
+  scale_fill_manual(values =  c("#744083", "#744083", "#744083")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+  labs(y = "reinterpretation (pred.)", x = "neural shift", title = network) +
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p
+
+
+p 
+ggsave(
+  paste0(
+    "../../results/eyetracking_plots/",
+    "reinterpretation_reinterpretation_by_neural_gaze_semantic_distance_",
+    network, "_",
+    gaze_choice,
+    ".png"
+  ),
+  p,
+  width = 9,
+  height = 3,
+  dpi = 300
+)
+
+
+
+pred_high <- subset(pred, facet == "0.75")
+
+p_high <- ggplot(
+  pred_high,
+  aes(
+    x = x,
+    y = predicted,
+    group = group,
+    color = group,
+    fill = group,
+    linetype = group
+  )
+) +
+  geom_ribbon(
+    aes(ymin = conf.low, ymax = conf.high),
+    alpha = 0.15,
+    color = NA
+  ) +
+  geom_line(size = .75) +
+  scale_color_manual(values =  c("#744083", "#744083", "#744083")) +
+  scale_fill_manual(values =  c("#744083", "#744083", "#744083")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+  labs(
+    y = NULL,
+    x = NULL,
+    #title = paste(network, "- High Semantic Distance")
+  ) +
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))+
+  ylim(0.1, 1)
+p_high <- p_high +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+p_high
+
+ggsave(
+  paste0(
+    "../../results/eyetracking_plots/",
+    "reinterpretation_reinterpretation_by_neural_gaze_semantic_distance_HIGH_",
+    network, "_",
+    gaze_choice,
+    ".png"
+  ),
+  p_high,
+  width = 3,
+  height = 3,
+  dpi = 300
+)
+
+
+model3 <- lmerTest::lmer(reinterpretation ~ neural_shift * gaze_z * semantic_distance + ( 1+gaze_z|Subject) + (1|stim_file) + (1|Node_Number) , data = net)
+tab_model(model3)
+
+
+slopes(model3,
+  variables = "neural_shift",
+  newdata = datagrid(
+    gaze_z            = c(-1, 0, 1),  # low/mid/high gaze values
+    semantic_distance = c(0.25, 0.50, 0.75)  #three facets
+  )
+)
+
+hypotheses(slopes(model3,
+  variables = "neural_shift",
+  newdata = datagrid(
+    gaze_z = c(-1, 1),
+    semantic_distance = 0.75
+  )),
+  hypothesis = "b1 = b2"
+)
+
+
+```
+
+
+# Fig. 4C
+```{r}
+data_sub <- data %>%
+  filter(Network_17N %in% c("VisPeri", "VisCent", "DefaultB")) %>%
+  filter(
+    !is.na(neural_shift) &
+    !is.na(reinterpretation) &
+    !is.na(semantic_distance) &
+    !is.na(gaze_z)
+  ) %>%
+  mutate(
+    Network_17N = case_when(
+      Network_17N %in% c("VisPeri", "VisCent") ~ "Visual",
+      Network_17N == "DefaultB" ~ "DefaultB"
+    ),
+    Network_17N = factor(Network_17N, levels = c("DefaultB", "Visual"))
+  )
+
+model_combined <- lmerTest::lmer(
+  reinterpretation ~ neural_shift * gaze_z * poly(semantic_distance, 3) * Network_17N +
+    (1 + gaze_z| Subject) + (1 | stim_file) + (1 | Node_Number),
+  data = data_sub
+)
+
+model_combined <- lmerTest::lmer(
+  reinterpretation ~ neural_shift * gaze_z * semantic_distance * Network_17N +
+    (1 + gaze_z| Subject) + (1 | stim_file) + (1 | Node_Number),
+  data = data_sub
+)
+
+slopes_high <- slopes(
+  model_combined,
+  variables = "neural_shift",
+  newdata = datagrid(
+    gaze_z = c(-1, 0, 1),
+    semantic_distance = 0.75,
+    Network_17N = c("DefaultB", "Visual")
+  )
+) %>%
+  as.data.frame() %>%
+  mutate(
+    gaze_label = factor(
+      gaze_z,
+      levels = c(-1, 0, 1),
+      labels = c("-1", "0", "1")
+    ),
+    Network_17N = factor(
+      Network_17N,
+      levels = c("DefaultB", "Visual"),
+      labels = c("DMN-B", "Visual")
+    )
+  )
+
+
+
+p_slopes <- ggplot(slopes_high, aes(x = gaze_label, y = estimate,
+                                      color = Network_17N, group = Network_17N)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
+  geom_line(position = position_dodge(width = 0.3), linewidth = 0.75) +
+  # geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+  #                  position = position_dodge(width = 0.3), size = 0.6) +
+  geom_pointrange(aes(ymin = estimate - std.error, ymax = estimate + std.error),
+                   position = position_dodge(width = 0.3), size = 0.6) +
+scale_color_manual(
+  values = c(
+    "DMN-B" = "#dc2e2c",
+    "Visual" = "#744083"
+  )
+)+labs(
+    x = NULL,
+    y = NULL,
+    color = NULL,
+  ) +
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "none",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.5)
+  )+
+  ylim(-.1,.2)
+
+p_slopes
+p_slopes <- p_slopes +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+
+
+
+ggsave(
+  paste0(
+    "../../results/eyetracking_plots/",
+    "reinterpretation_slopes_plot",
+    network, "_",
+    gaze_choice,
+    ".png"
+  ),
+  p_slopes,
+  width = 3,
+  height = 3,
+  dpi = 300
+)
+
+```
+
+# doing the statistical comparison  for the plot above
+```{r}
+
+data_sub <- data %>%
+  filter(Network_17N %in% c("VisPeri", "VisCent", "DefaultB")) %>%
+  filter(
+    !is.na(neural_shift) &
+    !is.na(reinterpretation) &
+    !is.na(semantic_distance) &
+    !is.na(gaze_z)
+  ) %>%
+  mutate(
+    Network_17N = case_when(
+      Network_17N %in% c("VisPeri", "VisCent") ~ "Visual",
+      Network_17N == "DefaultB" ~ "DefaultB"
+    ),
+    Network_17N = factor(
+      Network_17N,
+      levels = c("DefaultB", "Visual")
+    )
+  )
+
+model_combined <- lmerTest::lmer(
+  reinterpretation ~
+    neural_shift * gaze_z * semantic_distance * Network_17N +
+    (1 + gaze_z | Subject) +
+    (1 | stim_file) +
+    (1 | Node_Number),
+  data = data_sub
+)
+
+tab_model(model_combined)
+
+## --- Network-specific slopes at HIGH semantic distance ----------
+slopes_high <- slopes(
+  model_combined,
+  variables = "neural_shift",
+  newdata = datagrid(
+    gaze_z = c(-1, 0, 1),
+    semantic_distance = 0.75,
+    Network_17N = c("DefaultB", "Visual")
+  )
+)
+
+slopes_high
+
+## --- Formal DefaultB vs Visual test at HIGH semantic distance ----
+gaze_levels <- c(-1, 0, 1)
+
+network_diff_high <- purrr::map_dfr(gaze_levels, function(gz) {
+
+  test <- hypotheses(
+    slopes(
+      model_combined,
+      variables = "neural_shift",
+      newdata = datagrid(
+        gaze_z = gz,
+        semantic_distance = 0.75,
+        Network_17N = c("DefaultB", "Visual")
+      )
+    ),
+    hypothesis = "b1 = b2"
+  )
+
+  test$gaze_z <- gz
+  test
+})
+
+network_diff_high
+
+
+```
+
+
+#Fig 4D -- Are DMN-B and combined Visual-network reinterpretation signals independent of one another?
+```{r}
+
+## aggregate data 
+
+data_clean <- data %>%  #these should be out 
+  filter(
+    !is.na(neural_shift),
+    !is.na(reinterpretation),
+    !is.na(semantic_distance),
+    !is.na(gaze_z)
+  )
+
+
+df_agg <- data_clean %>%
+  filter(Network_17N %in% c("VisPeri", "VisCent", "DefaultB")) %>%
+  
+  # Combine VisPeri and VisCent into one Visual network
+  mutate(
+    Network_17N = case_when(
+      Network_17N %in% c("VisPeri", "VisCent") ~ "Visual",
+      Network_17N == "DefaultB"                ~ "DefaultB"
+    )
+  ) %>%
+  
+  # Average neural shift within Subject × stimulus × network
+  group_by(Subject, stim_file, Network_17N) %>%
+  summarise(
+    neural_shift      = mean(neural_shift, na.rm = TRUE),
+    semantic_distance = first(semantic_distance),
+    reinterpretation  = first(reinterpretation),
+    gaze_z            = first(gaze_z),
+    .groups = "drop"
+  )
+
+
+## 1. Long-format model
+
+df_agg <- df_agg %>%
+  mutate(
+    Network_17N = factor(
+      Network_17N,
+      levels = c("DefaultB", "Visual")
+    )
+  )
+
+
+m_long <- lmer(
+  reinterpretation ~ neural_shift * semantic_distance * Network_17N +
+    (1 +gaze_z| Subject) +
+    (1 | stim_file),
+  data = df_agg,
+  REML = FALSE
+)
+
+summary(m_long)
+
+
+## 2. Wide format: each network as its own predictor ────────────────────────
+## Creates:
+##   DefaultB_ns = mean DMN-B neural shift
+##   Visual_ns   = mean neural shift across VisPeri + VisCent
+df_wide <- df_agg %>%
+  pivot_wider(
+    names_from  = Network_17N,
+    values_from = neural_shift,
+    names_glue  = "{Network_17N}_ns"
+  ) %>%
+  filter(
+    complete.cases(
+      DefaultB_ns,
+      Visual_ns,
+      reinterpretation,
+      semantic_distance,
+      gaze_z
+    )
+  )
+
+```
+
+```{r}
+
+SD_HI <- 0.75
+GZ_HI <- 1
+
+## Models 
+
+# DMN-B unadjusted
+a <- lmer(
+  reinterpretation ~
+    DefaultB_ns * semantic_distance +
+    (1 +gaze_z| Subject) +
+    (1 | stim_file),
+  data = df_wide,
+  REML = FALSE
+)
+
+
+# Combined Visual network unadjusted
+c <- lmer(
+  reinterpretation ~
+    Visual_ns * semantic_distance * gaze_z +
+    (1 + gaze_z | Subject) +
+    (1 | stim_file),
+  data = df_wide,
+  REML = FALSE
+)
+
+
+# Joint model: DMN-B + Visual
+b <- lmer(
+  reinterpretation ~
+    DefaultB_ns * semantic_distance +
+    Visual_ns * semantic_distance * gaze_z +
+    (1 + gaze_z | Subject) +
+    (1 | stim_file),
+  data = df_wide,
+  REML = FALSE
+)
+
+
+##  Model tables 
+
+tab_model(
+  a,
+  b,
+  dv.labels = c(
+    "DMN-B unadjusted",
+    "Both (DMN-B adjusted)"
+  )
+)
+
+tab_model(
+  c,
+  b,
+  dv.labels = c(
+    "Visual unadjusted",
+    "Both (Visual adjusted)"
+  )
+)
+
+
+##  1. Marginal slopes 
+
+get_slope <- function(model, focal, network, adj, needs_gaze = TRUE) {
+
+  grid <- if (needs_gaze) {
+
+    datagrid(
+      model = model,
+      semantic_distance = SD_HI,
+      gaze_z = GZ_HI
+    )
+
+  } else {
+
+    datagrid(
+      model = model,
+      semantic_distance = SD_HI
+    )
+
+  }
+
+  slopes(
+    model,
+    variables = focal,
+    newdata = grid,
+    re.form = NA
+  ) %>%
+    as.data.frame() %>%
+    transmute(
+      network,
+      model = adj,
+      estimate,
+      se = std.error,
+      p = p.value,
+      conf.low,
+      conf.high
+    )
+}
+
+
+df_plot <- bind_rows(
+
+  get_slope(
+    a,
+    "DefaultB_ns",
+    "DMN-B",
+    "Unadjusted",
+    needs_gaze = FALSE
+  ),
+
+  get_slope(
+    b,
+    "DefaultB_ns",
+    "DMN-B",
+    "Adjusted"
+  ),
+
+  get_slope(
+    c,
+    "Visual_ns",
+    "Visual",
+    "Unadjusted"
+  ),
+
+  get_slope(
+    b,
+    "Visual_ns",
+    "Visual",
+    "Adjusted"
+  )
+
+) %>%
+  mutate(
+
+    network = factor(
+      network,
+      levels = c("DMN-B", "Visual")
+    ),
+
+    model = factor(
+      model,
+      levels = c("Unadjusted", "Adjusted")
+    ),
+
+    fill_group = factor(
+      paste0(network, "_", model),
+      levels = c(
+        "DMN-B_Unadjusted",
+        "DMN-B_Adjusted",
+        "Visual_Unadjusted",
+        "Visual_Adjusted"
+      )
+    )
+  )
+
+
+## Print marginal slopes 
+
+cat(
+  "=== slope of reinterpretation on neural shift, semantic distance =",
+  SD_HI,
+  "(Visual also at gaze_z =",
+  GZ_HI,
+  ") ===\n"
+)
+
+
+df_plot %>%
+  transmute(
+    network,
+    model,
+    slope = round(estimate, 3),
+    SE = round(se, 3),
+    p = signif(p, 3),
+    CI = paste0(
+      "[",
+      round(conf.low, 3),
+      ", ",
+      round(conf.high, 3),
+      "]"
+    )
+  ) %>%
+  as.data.frame() %>%
+  print(row.names = FALSE)
+
+
+## Percent attenuation: unadjusted → adjusted 
+
+cat("\n=== % attenuation, unadjusted -> adjusted ===\n")
+
+
+df_plot %>%
+  dplyr::select(
+    network,
+    model,
+    estimate
+  ) %>%
+  pivot_wider(
+    names_from = model,
+    values_from = estimate
+  ) %>%
+  mutate(
+    pct_attenuation = round(
+      100 * (1 - Adjusted / Unadjusted),
+      1
+    )
+  ) %>%
+  as.data.frame() %>%
+  print(row.names = FALSE)
+
+
+
+
+## Plot 
+## Solid bars  = unadjusted
+## Striped bars = adjusted for the other network
+
+
+fill_vals <- c(
+  "DMN-B_Unadjusted"  = "#dc2e2c",
+  "DMN-B_Adjusted"    = "#dc2e2c",
+  "Visual_Unadjusted" = "#744083",
+  "Visual_Adjusted"   = "#744083"
+)
+
+
+pattern_vals <- c(
+  "DMN-B_Unadjusted"  = "none",
+  "DMN-B_Adjusted"    = "stripe",
+  "Visual_Unadjusted" = "none",
+  "Visual_Adjusted"   = "stripe"
+)
+
+
+figure <- ggplot(
+  df_plot,
+  aes(
+    x = network,
+    y = estimate,
+    fill = fill_group,
+    colour = fill_group,
+    pattern = fill_group
+  )
+) +
+
+  geom_col_pattern(
+    position = position_dodge(width = 0.6),
+    width = 0.5,
+    alpha = 0.7,
+    linewidth = 1.2,
+    pattern_fill = "white",
+    pattern_colour = "white",
+    pattern_spacing = 0.06,
+    pattern_density = 0.3
+  ) +
+
+  geom_errorbar(
+    aes(
+      ymin = estimate - se,
+      ymax = estimate + se
+    ),
+    position = position_dodge(width = 0.6),
+    width = 0.15,
+    linewidth = 0.65,
+    colour = "grey30"
+  ) +
+
+  geom_hline(
+    yintercept = 0,
+    linewidth = 0.4,
+    colour = "grey40"
+  ) +
+
+  scale_fill_manual(
+    values = fill_vals
+  ) +
+
+  scale_colour_manual(
+    values = fill_vals,
+    guide = "none"
+  ) +
+
+  scale_pattern_manual(
+    values = pattern_vals,
+    guide = "none"
+  ) +
+
+  labs(
+    x = NULL,
+    y = NULL
+  ) +
+
+  theme_classic() +
+
+  theme(
+    aspect.ratio = 1,
+    legend.position = "none",
+    text = element_text(
+      family = "Helvetica Neue"
+    ),
+    axis.title = element_text(
+      size = 14
+    ),
+    axis.text.x = element_text(
+      size = 12
+    ),
+    axis.text.y = element_text(
+      size = 12
+    ),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_blank(),
+    panel.border = element_rect(
+      colour = "black",
+      fill = NA,
+      linewidth = 0.5
+    )
+  ) +
+
+  ylim(-0.1, 0.3)
+
+
+figure <- figure +
+  force_panelsizes(
+    rows = unit(2.5, "in"),
+    cols = unit(2.5, "in")
+  )
+
+
+figure
+
+
+ggsave(
+  paste0(
+    "../../results/eyetracking_plots/",
+    "dmnb_stability_both_Visual_",
+    gaze_choice,
+    ".png"
+  ),
+  figure,
+  width = 3.4,
+  height = 3,
+  dpi = 300
+)
+```

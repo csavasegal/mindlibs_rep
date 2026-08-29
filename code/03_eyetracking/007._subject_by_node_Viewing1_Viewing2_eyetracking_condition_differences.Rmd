@@ -1,0 +1,255 @@
+---
+title: "subject_by_node_Viewing1_Viewing2"
+output: html_document
+date: '2023-10-31'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(lme4)
+library(lmerTest)
+library(MASS)
+library(lmerTest)
+library(Rcpp)
+library(ggplot2)
+library(tidyverse)
+library(ggsignif)
+library(nlme)
+library(sjPlot)
+library(cowplot)
+library(ggside)
+library(sjPlot)
+library(patchwork)
+library(dplyr)
+library(ggh4x)
+```
+
+
+
+## STARTED HERE!! 
+
+```{r}
+current_directory <- getwd()
+print(current_directory) 
+file_path <- paste(current_directory, '../../data/subject_by_node_Viewing1_Viewing2_subs_schaefer_rois.csv', sep = "/")
+data = read.csv(file_path)
+
+
+data$Condition <- as.factor(data$Condition)
+condCond_over_Expt<- c(-1,1)
+contrasts(data$Condition) <- cbind(condCond_over_Expt) #should be lower in Cont
+
+### Let's drop some motion files    
+motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
+
+# Ensure columns are characters for consistent matching
+data$Subject <- as.character(data$Subject)
+data$img <- as.character(data$stim_file)
+motion_summary$Subject <- as.character(motion_summary$sub)
+motion_summary$img <- as.character(motion_summary$img)
+
+# Filter only the high motion trials
+#high_motion <- subset(motion_summary, high_motion == 'True')
+high_motion <- subset(motion_summary, mean_motion > 0.5)
+
+# Create keys for matching
+data$key_sub <- paste(data$sub, data$img, sep = "_")
+high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
+
+# Mark as bad if either sub or other_sub_used has a high motion trial for the image
+data$bad <- data$key_sub %in% high_motion_keys
+
+# Drop bad rows
+data_clean <- subset(data, bad == FALSE)
+
+data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
+
+data <- data_clean
+
+
+
+eyetracking_data <-read.csv("/Volumes/FinnLab/datasets/madlibs-eyetracking/results/combined-eye-tracking_behavioral_results_fmri_QCed_screensize_merge_iticorr_mindur100.csv")
+
+eyetracking_subset <- eyetracking_data %>%
+  rename(Subject = subject, stim_file = stimulus) %>%
+  dplyr::select(Subject, stim_file, mm_direction, mm_position, mm_duration, mm_shape, mm_length, dtw_shift, fixation_map_pearson_r, eyelink_hz, fixation_count_discrepancy)
+
+
+# Merge datasets
+data <- data %>%
+  left_join(eyetracking_subset, by = c("Subject", "stim_file"))
+
+nrow(data)
+length(unique(data$Subject))
+summary(data$Position)
+
+eye_subs <- unique(eyetracking_subset$Subject)
+mri_subs <- unique(data$Subject)
+missing_subjects <- setdiff(eye_subs, mri_subs)
+missing_subjects
+
+length(mri_subs)
+length(eye_subs)
+
+
+```
+
+
+
+### Condition differences
+```{r}
+data <- data %>%
+  mutate(
+    confidence = confidence / 100,
+    self = appraisal_SELF_cond1 / 100,
+    other = appraisal_OTHER_cond1 / 100
+  )
+
+#Create reinterpretation value
+data <- data %>%
+  mutate(reinterpretation = confidence - self + other)
+
+data$neural_shift <- 1 - atanh(data$R_Value)
+data <- data[data$Subject != "sub-016",] #terrible eyetracking data!
+
+```
+
+
+#Condition differences!! 
+```{r}
+
+#METRIC IN THE MAIN PAPER!!
+gaze_choice = 'fixation_map_pearson_r'
+data$mm_mean5 <- data$fixation_map_pearson_r
+data$gaze_change <- 1 - data[[gaze_choice]]
+
+
+#METRIC IN THE SUPPLEMENT!!
+# data$mm_mean5 <- data$mm_shape
+# data$gaze_change <- 1 - data[[gaze_choice]]
+# gaze_choice = 'mm_mean5_100_z'
+
+
+
+###############################################################################
+## GAZE SHIFT SCORE
+## One value per trial, z-scored within subject.
+###############################################################################
+gaze_trial_level <- data %>%
+  distinct(Subject, stim_file, gaze_change) %>%
+  filter(!is.na(gaze_change)) %>%
+  group_by(Subject) %>%
+  mutate(gaze_z = as.numeric(scale(gaze_change))) %>%
+  ungroup() %>%
+  dplyr::select(Subject, stim_file, gaze_z)
+
+
+# Merge the trial-level gaze_z back onto the full node-level data
+data <- data %>%
+  dplyr::select(-any_of("gaze_z")) %>%
+  inner_join(gaze_trial_level, by = c("Subject", "stim_file"))
+
+
+```
+
+
+#plotting the (lack of) condition differences (Fig 2C)
+```{r}
+
+node <- data[data$Node_Number==1,] #doing it with ONE NODE
+library(see)
+library(ggstatsplot)
+library(zeallot)
+source("../utils/ggbetweenstats_custom.R")
+
+data$Condition <- as.factor(data$Condition)
+condCond_over_Expt <- c(-1, 1)
+contrasts(data$Condition) <- cbind(condCond_over_Expt)
+model <- lmer(gaze_z ~ Condition + (1|Subject) + (1|stim_file), data = node)
+tab_model(model)
+summary(model)
+
+subset_data <- node
+
+# Aggregate gaze_z per subject per condition
+summary_data <- subset_data %>%
+  group_by(Subject, Condition) %>%
+  summarize(avg_gaze = median(gaze_z, na.rm = TRUE), .groups = 'drop')
+
+# Plot
+p <- ggbetweenstats_custom(
+  data = summary_data,
+  x = Condition,
+  y = avg_gaze,
+  centrality.plotting = FALSE,
+  point.args = list(alpha = 0)
+) +
+  geom_point(
+    data = summary_data,
+    aes(x = Condition, y = avg_gaze, fill = Condition),
+    position = position_jitter(width = 0.08),
+    shape = 21,
+    stroke = 0,
+    size = 2,
+    alpha = 0.6
+  ) +
+  scale_fill_manual(values = c("cont" = "#dc853f", "expt" = "#17685b")) +
+  scale_color_manual(values = c("cont" = "#dc853f", "expt" = "#17685b")) +
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    size = 3,
+    color = "black"
+  ) +
+  labs(y = NULL, x = NULL, title = NULL) +
+    theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))+
+  geom_line(
+    data = summary_data,
+    aes(x = Condition, y = avg_gaze, group = Subject),
+    color = "darkgrey", linewidth = .5, alpha = .2
+  )+ylim(-1.1, 1.1)
+
+
+
+# Model + significance annotation
+m <- lmer(gaze_z ~ Condition + (1 | Subject) + (1 | stim_file), data = subset_data)
+summary_m <- summary(m)
+beta <- summary_m$coefficients["ConditioncondCond_over_Expt", "Estimate"]
+pval <- summary_m$coefficients["ConditioncondCond_over_Expt", "Pr(>|t|)"]
+p_stars <- ifelse(pval < 0.001, "***",
+           ifelse(pval < 0.01, "**",
+           ifelse(pval < 0.05, "*", "ns")))
+annot_text <- sprintf(p_stars)
+
+ymax <- max(summary_data$avg_gaze, na.rm = TRUE)
+
+p <- p +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+p
+
+ggsave(
+  paste0("../../results/condition_plots/gaze_condition_diff_", gaze_choice, "_node", unique(subset_data$Node_Number), ".png"),
+  plot = p, width = 3, height = 3, dpi = 300
+)
+
+
+```
+

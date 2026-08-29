@@ -1,0 +1,537 @@
+---
+title: "subject_by_node_Viewing1_Viewing2_reinterpretation"
+output: html_document
+date: '2023-10-31'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(lme4)
+library(lmerTest)
+library(MASS)
+library(lmerTest)
+library(Rcpp)
+library(ggplot2)
+library(tidyverse)
+library(ggsignif)
+library(nlme)
+library(sjPlot)
+library(cowplot)
+library(ggside)
+library(sjPlot)
+library(patchwork)
+
+source("../utils/run_lmer_functions.R")
+source("../utils/add_network_labels.R")
+#install.packages("ggh4x")  # only needed once
+library(ggh4x)
+library(grid)              # for unit()
+```
+
+
+```{r}
+current_directory <- getwd()
+print(current_directory) 
+file_path <- paste(current_directory, '../../data/subject_by_node_Viewing1_Viewing2_subs_schaefer_rois.csv', sep = "/")
+data = read.csv(file_path)
+
+
+#getting some basic stats on the data
+node1 <- data[data$Node_Number==1,]
+node1$semantic_distance <- 1 - node1$cosine_sim_avg_inputs_BERT_context_miniLM_L6
+mean(node1$semantic_distance, na.rm = TRUE)
+sd(node1$semantic_distance, na.rm = TRUE)
+range(node1$semantic_distance, na.rm = TRUE)
+
+```
+
+
+### Let's drop some motion files    
+```{r}
+motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
+
+# Ensure columns are characters for consistent matching
+data$Subject <- as.character(data$Subject)
+
+data$img <- as.character(data$stim_file)
+motion_summary$Subject <- as.character(motion_summary$sub)
+motion_summary$img <- as.character(motion_summary$img)
+
+# Filter only the high motion trials
+#high_motion <- subset(motion_summary, high_motion == 'True')
+high_motion <- subset(motion_summary, mean_motion > 0.5)
+
+# Create keys for matching
+data$key_sub <- paste(data$sub, data$img, sep = "_")
+high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
+
+data$bad <- data$key_sub %in% high_motion_keys
+
+data_clean <- subset(data, bad == FALSE)
+
+data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
+
+data <- data_clean
+
+```
+
+
+```{r}
+data_experimental <- data[data$Condition == "expt", ]
+
+
+library(dplyr)
+
+# Step 1: Rescale to 0-1 range
+data_experimental <- data_experimental %>%
+  mutate(
+    confidence = confidence / 100,
+    self = appraisal_SELF_cond1 / 100,
+    other = appraisal_OTHER_cond1 / 100
+  )
+
+
+data_experimental <- data_experimental %>%
+  mutate(reinterpretation = confidence - self + other) %>%
+  mutate(reinterpretation_z = as.numeric(scale(reinterpretation)))
+
+
+data_experimental$semantic_distance <- 1 - data_experimental$cosine_sim_avg_inputs_BERT_context_miniLM_L6
+
+data_experimental <- data_experimental %>%
+  mutate(
+    Fisher_R_Value = atanh(R_Value),
+    neural_shift = 1-Fisher_R_Value,
+  )
+
+```
+
+
+```{r}
+a = data_experimental[data_experimental$Node_Number==1,]
+#a = plot_data
+# Distribution plot
+p <- ggplot(a, aes(x = reinterpretation)) +
+    theme_classic(base_size = 18) +
+  geom_histogram(bins = 30, fill = "lightgray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = -1, color = "darkgray", size = 1, linetype = "dashed") +
+  geom_vline(xintercept = 2, color = "darkgray", size = 1, linetype = "dashed") +
+  labs(
+    title = "",
+    x = "reinterpretation value",
+    y = "Count"
+  ) +
+    labs(y = NULL, x = NULL, title = NULL) +
+    theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p
+p <- p +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+p
+
+ggsave("../../results/reinterpretation_plots/distribution_of_reinterpretation.png", p, width = 3, height = 3, dpi = 300)
+p
+```
+
+
+## Getting the whole brain stat (going to extract just the linear poly!)
+```{r}
+data_experimental <- data_experimental %>%
+  filter(
+    !is.na(reinterpretation),
+    !is.na(neural_shift),
+    !is.na(semantic_distance),
+  )
+
+#WHOLE BRAIN MODEL:
+model <- lmer(reinterpretation ~ neural_shift*poly(semantic_distance,3) + (1|stim_file) + (1|Subject) +(1|Node_Number), data=data_experimental)
+tab_model(model)
+
+```
+
+#Doing the stats at the network level--> will be used in the 006 plotting script!
+```{r}
+
+formula <- "reinterpretation ~ neural_shift*poly(semantic_distance,3)"
+random_effects <- " + (1|Subject) + (1|stim_file) "
+result_df <- run_lmer_model(data_experimental, formula, random_effects,dir_local = 'reinterpretation')
+
+#grabs it per network
+random_effects <- " + (1|Subject) + (1|stim_file) + (1|Node_Number)"
+result_df <- run_lmer_model_by_network(data_experimental, formula, random_effects,network_col = "Network_17N", output_folder = "model_outputs", dir_local = "17N")
+
+```
+
+#Figure 1D
+```{r}
+data_experimental <- add_schaefer_network_labels(data_experimental)
+
+subset_data <- data_experimental[data_experimental$Network_17N=='DefaultB',]
+model <- lmer(reinterpretation ~ neural_shift*semantic_distance + (1|stim_file) + (1|Subject) +(1|Node_Number), data=subset_data)
+tab_model(model)
+
+library(ggeffects)
+pred <- ggpredict(model, c("neural_shift","semantic_distance [0.25, 0.50, 0.75]"))
+
+p <- ggplot(pred, aes(x = x, y = predicted, 
+                       group = group, color = group, 
+                       fill = group, linetype = group)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
+geom_line(size = 0.75)+
+  scale_color_manual(values = c("#D4524A", "#D4524A", "#D4524A")) +
+  scale_fill_manual(values = c("#D4524A", "#D4524A", "#D4524A")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+  labs(y = NULL, x = NULL, title = NULL) +
+    theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p
+p <- p +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+p
+
+ggsave("../../results/reinterpretation_plots/reinterpretation_DMNB.png", p, width = 3, height = 3, dpi = 300)
+
+```
+
+
+
+### marignal slopes thing to get the comparison!
+```{r}
+library(marginaleffects)
+
+# Refit with polynomial semantic distance, to match your stated Methods
+model <- lmer(
+  reinterpretation ~ neural_shift * poly(semantic_distance, 3) +
+    (1|stim_file) + (1|Subject) + (1|Node_Number),
+  data = subset_data
+)
+
+# Estimated marginal slope of neural_shift at low (0.25) and high (0.75) semantic distance
+slopes_by_distance <- slopes(
+  model,
+  variables = "neural_shift",
+  newdata = datagrid(semantic_distance = c(0.25, 0.50, 0.75))
+)
+slopes_by_distance
+
+# Formal test: is the slope at high distance significantly different from the slope at low distance?
+hypotheses(
+  slopes(
+    model,
+    variables = "neural_shift",
+    newdata = datagrid(semantic_distance = c(0.25, 0.75))
+  ),
+  hypothesis = "b1 = b2"
+)
+
+```
+
+
+
+#Same -- pairwise mutual adjustment!- for Supplementary figure! 
+```{r}
+
+library(dplyr)
+library(tidyr)          
+library(ggpattern)
+library(lme4)
+library(broom.mixed)
+library(purrr)
+library(patchwork)
+
+# Recreate df_wide 
+networks_of_interest <- c("DefaultB", "ContA", "ContB", "SalVentAttnB")
+
+df_agg <- data_experimental %>%
+  filter(Network_17N %in% networks_of_interest) %>%
+  group_by(Subject, stim_file, Network_17N) %>%
+  summarise(
+    neural_shift      = mean(neural_shift, na.rm = TRUE),
+    semantic_distance = first(semantic_distance),
+    reinterpretation  = first(reinterpretation),
+    .groups = "drop"
+  )
+
+df_wide <- df_agg %>% #because going to use the mean shift! 
+  pivot_wider(
+    names_from  = Network_17N,
+    values_from = neural_shift,
+    names_glue  = "{Network_17N}_ns"
+  ) %>%
+  filter(complete.cases(
+    DefaultB_ns, ContA_ns, ContB_ns, SalVentAttnB_ns,
+    reinterpretation, semantic_distance
+  ))
+
+# 1. Network labels + colors 
+network_labels <- c(
+  "DefaultB"     = "DMN-B",
+  "ContA"        = "FPN-A",
+  "ContB"        = "FPN-B",
+  "SalVentAttnB" = "VAN-B"
+)
+
+comparison_networks <- c("ContA", "ContB", "SalVentAttnB")
+
+network_colors <- c(
+  "DMN-B" = "#dc2d2c",
+  "FPN-A" = "#8a5914",
+  "FPN-B" = "#b8761b",
+  "VAN-B" = "#f028e9"
+)
+
+# 2. get_coef 
+## LINEAR: the interaction term is "<col>:semantic_distance" (either ordering).
+get_coef <- function(model, col, label, model_label, fill_group) {
+  wanted <- c(paste0(col, ":semantic_distance"),
+              paste0("semantic_distance:", col))
+
+  result <- tidy(model, effects = "fixed") %>%
+    filter(term %in% wanted) %>%
+    mutate(network = label, model = model_label, fill_group = fill_group)
+
+  cat("\n──", label, "|", model_label, "──\n")
+  if (nrow(result) > 0) {
+    cat("  β =", round(result$estimate, 4),
+        "| SE =", round(result$std.error, 4),
+        "| t =", round(result$statistic, 3),
+        "| p =", round(result$p.value, 4), "\n")
+  } else {
+    cat("  term is missing!!!! :\n    ",
+        paste(tidy(model, effects = "fixed")$term, collapse = "\n     "), "\n")
+  }
+  result
+}
+
+#  3. Fit  models 
+m_dmnb_alone <- lmer(
+  reinterpretation ~ DefaultB_ns * semantic_distance +
+    (1|Subject) + (1|stim_file),
+  data = df_wide
+)
+
+dmnb_unadj <- get_coef(m_dmnb_alone, "DefaultB_ns", "DMN-B",
+                       "Unadjusted", "DMN-B_Unadjusted")
+
+results <- map_dfr(comparison_networks, function(net) {
+  other_col   <- paste0(net, "_ns")
+  other_label <- unname(network_labels[net])
+
+  cat("\n════════════════════════════════\n")
+  cat("DMN-B vs", other_label, "\n")
+  cat("════════════════════════════════\n")
+
+  m_dmnb_adj <- lmer(
+    as.formula(paste0(
+      "reinterpretation ~ DefaultB_ns * semantic_distance + ",
+      other_col, " * semantic_distance + (1|Subject) + (1|stim_file)"
+    )),
+    data = df_wide
+  )
+
+  m_other_alone <- lmer(
+    as.formula(paste0(
+      "reinterpretation ~ ", other_col, " * semantic_distance + ",
+      "(1|Subject) + (1|stim_file)"
+    )),
+    data = df_wide
+  )
+
+  m_other_adj <- lmer(
+    as.formula(paste0(
+      "reinterpretation ~ ", other_col, " * semantic_distance + ",
+      "DefaultB_ns * semantic_distance + (1|Subject) + (1|stim_file)"
+    )),
+    data = df_wide
+  )
+
+  bind_rows(
+    get_coef(m_dmnb_adj,    "DefaultB_ns", "DMN-B",     paste0("Adj_", other_label), paste0("DMN-B_Adj_", other_label)),
+    get_coef(m_other_alone, other_col,     other_label, "Unadjusted",                paste0(other_label, "_Unadjusted")),
+    get_coef(m_other_adj,   other_col,     other_label, "Adjusted",                  paste0(other_label, "_Adjusted"))
+  ) %>%
+    mutate(comparison = other_label)
+})
+
+# Top row
+dmnb_plot_data <- bind_rows(
+  dmnb_unadj %>%
+    mutate(x_pos = 1, se = std.error, pattern_type = "none", fill_col = "#dc2d2c"),
+  results %>%
+    filter(network == "DMN-B") %>%
+    rename(se = std.error) %>%
+    mutate(
+      x_pos = case_when(
+        comparison == "FPN-A" ~ 2,
+        comparison == "FPN-B" ~ 3,
+        comparison == "VAN-B" ~ 4
+      ),
+      pattern_type = "stripe",
+      fill_col     = "#dc2d2c"
+    )
+)
+
+# Bottom row
+other_plot_data <- results %>%
+  filter(network != "DMN-B") %>%
+  rename(se = std.error) %>%
+  mutate(
+    model    = factor(model, levels = c("Unadjusted", "Adjusted")),
+    network  = factor(network, levels = c("FPN-A", "FPN-B", "VAN-B")),
+    fill_col = case_when(
+      network == "FPN-A" ~ "#8a5914",
+      network == "FPN-B" ~ "#b8761b",
+      network == "VAN-B" ~ "#f028e9"
+    ),
+    pattern_type = ifelse(model == "Adjusted", "stripe", "none"),
+    x_pos = case_when(
+      network == "FPN-A" ~ 2,
+      network == "FPN-B" ~ 3,
+      network == "VAN-B" ~ 4
+    ),
+    x_dodge = x_pos + ifelse(model == "Unadjusted", -0.15, 0.15)
+  )
+
+
+
+all_vals <- bind_rows(
+  dmnb_plot_data %>% dplyr::select(estimate, se),
+  other_plot_data %>% dplyr::select(estimate, se)
+)
+y_lo <- min(all_vals$estimate - all_vals$se)
+y_hi <- max(all_vals$estimate + all_vals$se)
+pad  <- 0.12 * (y_hi - y_lo)
+y_limits <- c(min(y_lo - pad, 0), max(y_hi + pad, 0))
+
+cat(sprintf("\ny-axis limits: [%.3f, %.3f]\n", y_limits[1], y_limits[2]))
+
+y_lab <- expression(beta ~ "(neural shift × semantic distance)")
+
+base_theme <- theme_classic() +
+  theme(
+    aspect.ratio     = 1,
+    text             = element_text(family = "Helvetica Neue"),
+    axis.title       = element_text(size = 14),
+    axis.text.x      = element_text(size = 12),
+    axis.text.y      = element_text(size = 10),
+    legend.position  = "none",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line        = element_blank(),
+    panel.border     = element_rect(colour = "black", fill = NA, linewidth = 0.5)
+  )
+
+col_layer <- geom_col_pattern(
+  width             = 0.25,
+  alpha             = 0.85,
+  linewidth         = 0.4,
+  color             = "grey20",
+  pattern_fill      = "white",
+  pattern_colour    = "white",
+  pattern_spacing   = 0.06,
+  pattern_density   = 0.3,
+  pattern_linewidth = 0.3
+)
+
+row1 <- ggplot(dmnb_plot_data, aes(
+    x = x_pos, y = estimate, fill = fill_col,
+    pattern = pattern_type, group = x_pos
+  )) +
+  col_layer +
+  geom_errorbar(aes(ymin = estimate - se, ymax = estimate + se),
+                width = 0.12, linewidth = 0.5, color = "black") +
+  geom_vline(xintercept = 1.5, linetype = "dashed", color = "grey50", linewidth = 0.6) +
+  geom_hline(yintercept = 0, linewidth = 0.4, color = "grey40") +
+  scale_fill_identity() +
+  scale_pattern_manual(values = c("none" = "none", "stripe" = "stripe")) +
+  coord_cartesian(ylim = y_limits) +            # zoom, do not drop data
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4),
+    labels = c("Unadjusted", "adj. for\nFPN-A", "adj. for\nFPN-B", "adj. for\nVAN-B"),
+    limits = c(0.5, 4.5)
+  ) +
+  labs(x = NULL, y = y_lab, title = "DMN-B") +
+  base_theme +
+  theme(plot.title = element_text(size = 13, face = "bold", hjust = 0.5))
+
+row2 <- ggplot(other_plot_data, aes(
+    x = x_dodge, y = estimate, fill = fill_col,
+    pattern = pattern_type, group = interaction(network, model)
+  )) +
+  col_layer +
+  geom_errorbar(aes(ymin = estimate - se, ymax = estimate + se, x = x_dodge),
+                width = 0.12, linewidth = 0.5, color = "black", na.rm = TRUE) +
+  geom_hline(yintercept = 0, linewidth = 0.4, color = "grey40") +
+  scale_fill_identity() +
+  scale_pattern_manual(values = c("none" = "none", "stripe" = "stripe")) +
+  coord_cartesian(ylim = y_limits) +
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4),
+    labels = c("", "FPN-A", "FPN-B", "VAN-B"),
+    limits = c(0.5, 4.5)
+  ) +
+  labs(x = NULL, y = y_lab) +
+  base_theme +
+  theme(axis.text.x = element_text(size = 12, face = "bold"))
+
+
+
+figure <- row1 / row2 + plot_layout(heights = c(1.2, 1.2))
+figure
+
+ggsave(
+  filename = "../../results/reinterpretation_plots/stability_combined_LINEAR.png",
+  plot     = figure,
+  width    = 3.5,
+  height   = 4.5,
+  dpi      = 300
+)
+
+#SUMMARY!!
+cat("\n=== LINEAR semantic distance: all extracted coefficients ===\n")
+bind_rows(dmnb_plot_data, other_plot_data) %>%
+  transmute(network, model,
+            beta = round(estimate, 4),
+            SE   = round(se, 4),
+            t    = round(statistic, 2),
+            p    = signif(p.value, 3),
+            sig  = ifelse(p.value < .001, "***",
+                   ifelse(p.value < .01,  "**",
+                   ifelse(p.value < .05,  "*", "")))) %>%
+  as.data.frame() %>%
+  print(row.names = FALSE)
+
+
+```
+

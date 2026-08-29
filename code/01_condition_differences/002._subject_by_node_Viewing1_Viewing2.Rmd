@@ -1,0 +1,593 @@
+---
+title: "subject_by_node_Viewing1_Viewing2"
+output: html_document
+date: '2023-10-31'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(lme4)
+library(lmerTest)
+library(MASS)
+library(lmerTest)
+library(Rcpp)
+library(ggplot2)
+library(tidyverse)
+library(ggsignif)
+library(nlme)
+library(sjPlot)
+library(cowplot)
+library(ggside)
+library(sjPlot)
+library(ggtext)
+library(patchwork)
+library(dplyr)
+library(purrr)
+library(broom.mixed)
+library(see)
+library(ggstatsplot)
+library(zeallot)
+
+
+source("../utils/run_lmer_functions.R")
+source("../utils/add_network_labels.R")
+#install.packages("ggh4x")  # only needed once
+library(ggh4x)
+library(grid)              # for unit()
+
+```
+
+
+```{r}
+current_directory <- getwd()
+print(current_directory) #this is so annoying!
+file_path <- paste(current_directory, '../../data/subject_by_node_Viewing1_Viewing2_subs_schaefer_rois.csv', sep = "/")
+data = read.csv(file_path)
+
+
+
+data$Condition <- as.factor(data$Condition)
+condCond_over_Expt<- c(-1,1)
+contrasts(data$Condition) <- cbind(condCond_over_Expt) #should be lower in Cont
+data
+```
+
+
+### Let's drop the high motion data! 
+```{r}
+motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
+
+# Ensure columns are characters for consistent matching
+data$Subject <- as.character(data$Subject)
+data$img <- as.character(data$stim_file)
+motion_summary$sub <- as.character(motion_summary$sub)
+motion_summary$img <- as.character(motion_summary$img)
+
+# Filter only the high motion trials
+high_motion <- subset(motion_summary, high_motion == 'True')
+
+# Create keys for matching
+data$key_sub <- paste(data$sub, data$img, sep = "_")
+high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
+
+# Mark as bad if either sub or other_sub_used has a high motion trial for the image
+data$bad <- data$key_sub %in% high_motion_keys
+
+# Drop bad rows
+data_clean <- subset(data, bad == FALSE)
+
+data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
+
+data <- data_clean
+```
+
+
+
+```{r}
+data$appraisal_SELF <- ifelse(!is.na(data$appraisal_SELF_cond1), 
+                              data$appraisal_SELF_cond1, 
+                              data$appraisal_SELF_cond2)
+data$appraisal_SELF <- data$appraisal_SELF/100
+data$confidence <- data$confidence /100
+data$appraisal_OTHER <- data$appraisal_OTHER_cond1 /100
+
+data <- data[
+  !(is.nan(data$appraisal_SELF) |
+    is.nan(data$appraisal_OTHER) |
+    is.nan(data$confidence) |
+    is.nan(data$stim_file) |
+    is.nan(data$Subject)),
+]
+```
+
+
+
+#Behavioral spread, current Fig. 2A
+```{r}
+data_control <- data[data$Condition=='cont',]
+data_experimental <- data[data$Condition=='expt',]
+
+# Control plot
+p_control <- ggplot(data_control, aes(x = confidence, y = appraisal_SELF)) +
+  geom_point(size=1.5, color="#dc853f", alpha=.3,stroke=0)+
+#geom_point(
+#  size = 1,
+#  shape = 21,
+#  fill = scales::alpha("#e7c19e", 0.3),
+#  color = "#dc853f",
+#  alpha = 0.1,   # controls transparency of both fill and border
+#  stroke = .1  
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black", size = 0.8) +
+  labs(
+    x = NULL,
+    y = NULL,
+    #title = "Control Condition"
+  ) +
+scale_x_continuous(
+  limits = c(0, 1),
+  breaks = c(0, 0.5, 1)
+) +
+scale_y_continuous(
+  limits = c(0, 1),
+  breaks = c(0, 0.5, 1)
+)+
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+
+
+# Experimental plot
+p_experimental <- ggplot(data_experimental, aes(x = confidence, y = appraisal_SELF)) +
+#geom_point(
+#  size = 1,
+#  shape = 21,
+##  fill = scales::alpha("#8fada8", 0.5),  # lower this
+#  color = "#17685b",
+#  stroke = .1
+#)+ 
+geom_point(size=1.5, color="#17685B", alpha=.3,stroke=0)+
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black", size = 0.8) +
+  labs(
+    x = NULL,
+    y = NULL,
+    #title = "Experimental Condition"
+  ) +
+scale_x_continuous(
+  limits = c(0, 1),
+  breaks = c(0, 0.5, 1)
+) +
+scale_y_continuous(
+  limits = c(0, 1),
+  breaks = c(0, 0.5, 1)
+)+
+    theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p_control
+p_control <- p_control +
+  force_panelsizes(rows = unit(2, "in"), cols = unit(2, "in"))
+
+p_experimental
+p_experimental <- p_experimental +
+  force_panelsizes(rows = unit(2, "in"), cols = unit(2, "in"))
+
+# Save individual plots
+ggsave("../../results/condition_plots/002_confidence_appraisal_control.png", plot = p_control, 
+       width = 3, height = 3, dpi = 300, bg = "transparent")
+
+ggsave("../../results/condition_plots/002_confidence_appraisal_experimental.png", plot = p_experimental, 
+       width = 3, height = 3, dpi = 300, bg = "transparent")
+
+print(p_control)
+print(p_experimental)
+```
+
+
+```{r}
+
+source("../utils/ggbetweenstats_custom.R")
+data$Condition <- as.factor(data$Condition)
+condCond_over_Expt<- c(1,-1)
+contrasts(data$Condition) <- cbind(condCond_over_Expt)
+
+subset_data <- data[data$Node_Number==1,]
+
+
+# Create the difference variable
+subset_data$difference <- abs(subset_data$appraisal_SELF - subset_data$confidence)
+
+# Group by Subject and Condition to get the average difference for each participant in each condition
+summary_data <- subset_data %>%
+  group_by(Subject, Condition) %>%
+  summarize(avg_difference = median(difference, na.rm = TRUE), .groups = 'drop')
+
+# Create the plot
+p <- ggbetweenstats_custom(
+  data = summary_data,
+  x = Condition,
+  y = avg_difference,
+  centrality.plotting = FALSE,
+  # hide ggbetweenstats' own raw points
+  point.args = list(alpha = 0)
+) + 
+  geom_point(
+    data = summary_data,
+    aes(x = Condition, y = avg_difference, fill = Condition),
+    position = position_jitter(width = 0.08),
+    shape = 21,          # allows separate fill + outline
+    #color = "black",     # outline
+    stroke = 0,
+    size = 2,
+    alpha = 0.6    
+
+  ) +
+  scale_fill_manual(values = c("cont" = "#dc853f", "expt" = "#17685b")) +
+  scale_color_manual(values = c("cont" = "#dc853f", "expt" = "#17685b")) +
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    size = 3,
+    color = "black"      # this is just the big mean dot, no outline needed
+  ) +
+    labs(
+    y = NULL,
+    x = NULL,
+    #title = paste(network, "- High Semantic Distance")
+  ) +
+  #labs(y = "Median SELF\u2082 \u2212 SELF\u2081")+
+  theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        )
+)+
+  geom_line(
+    data = summary_data, 
+    aes(x = Condition, y = avg_difference, group = Subject), 
+    color = "darkgrey", linewidth = .5, alpha = .2
+  )
+
+m <- lmer(difference ~ Condition + (1 | Subject) + (1 | stim_file),
+          data = subset_data)
+tab_model(m)
+summary(m)
+
+summary_m <- summary(m)
+beta <- summary_m$coefficients["ConditioncondCond_over_Expt", "Estimate"]
+pval <- summary_m$coefficients["ConditioncondCond_over_Expt", "Pr(>|t|)"]
+p_stars <- ifelse(pval < 0.001, "***",
+           ifelse(pval < 0.01, "**",
+           ifelse(pval < 0.05, "*", "ns")))
+annot_text <- sprintf( p_stars)
+
+ymax <- max(summary_data$avg_difference, na.rm = TRUE)
+
+p <- p +
+  geom_segment(aes(x = 1, xend = 2,
+                   y = ymax + 0.02, yend = ymax + 0.02),
+               linewidth = 0.8, color = "black") +
+  annotate("text",
+           x = 1.5,
+           y = ymax + 0.025,
+           label = annot_text,
+           size = 5,
+           fontface = "bold")
+
+
+ggsave("../../results/condition_plots/002._ggeffects_condition_abs_diff.png", plot = p, width = 3, height = 3 , dpi = 300)
+
+print(beta)
+p
+
+```
+
+#The one in the Supplement
+```{r}
+source("../utils/ggbetweenstats_custom.R")
+data$Condition <- as.factor(data$Condition)
+condCond_over_Expt<- c(1,-1)
+contrasts(data$Condition) <- cbind(condCond_over_Expt)
+
+subset_data <- data[data$Node_Number==1,]
+
+# Create the difference variable
+subset_data$difference <- (subset_data$appraisal_SELF - subset_data$confidence)
+
+summary_data <- subset_data %>%
+  group_by(Subject, Condition) %>%
+  summarize(avg_difference = median(difference, na.rm = TRUE), .groups = 'drop')
+
+# Create the plot
+p <- ggbetweenstats_custom(
+  data = summary_data,
+  x = Condition,
+  y = avg_difference,
+  centrality.plotting = FALSE,
+  # hide ggbetweenstats' own raw points
+  point.args = list(alpha = 0)
+) + 
+  geom_point(
+    data = summary_data,
+    aes(x = Condition, y = avg_difference, fill = Condition),
+    position = position_jitter(width = 0.08),
+    shape = 21,          # allows separate fill + outline
+    stroke = 0,
+    size = 2,
+    alpha = 0.6    
+
+  ) +
+  scale_fill_manual(values = c("cont" = "#dc853f", "expt" = "#17685b")) +
+  scale_color_manual(values = c("cont" = "#dc853f", "expt" = "#17685b")) +
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    size = 3,
+    color = "black"      # this is just the big mean dot, no outline needed
+  ) +
+  labs(y = "Median SELF\u2082 \u2212 SELF\u2081")+
+  theme_minimal() +
+  theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  text = element_text(family = "Helvetica Neue"),
+  axis.text.x = element_text(angle = 0, hjust = .5, size = 10),
+  axis.text.y = element_text(size = 10),
+  axis.title.y = element_text(size = 14),
+  axis.title.x = element_text(size = 14),
+  axis.ticks = element_line(color = "black"),
+  axis.ticks.length = unit(0.07, "cm"),
+  legend.position = "none",
+  panel.border = element_rect(fill = NA, color = "black")
+)+
+  geom_line(
+    data = summary_data, 
+    aes(x = Condition, y = avg_difference, group = Subject), 
+    color = "darkgrey", linewidth = .5, alpha = .2
+  )
+
+m <- lmer(difference ~ Condition + (1 | Subject) + (1 | stim_file),
+          data = subset_data)
+
+summary_m <- summary(m)
+beta <- summary_m$coefficients["ConditioncondCond_over_Expt", "Estimate"]
+pval <- summary_m$coefficients["ConditioncondCond_over_Expt", "Pr(>|t|)"]
+p_stars <- ifelse(pval < 0.001, "***",
+           ifelse(pval < 0.01, "**",
+           ifelse(pval < 0.05, "*", "ns")))
+#annot_text <- sprintf("β = %.3f  %s", beta, p_stars)
+annot_text <- sprintf( p_stars)
+
+ymax <- max(summary_data$avg_difference, na.rm = TRUE)
+
+p <- p +
+  geom_segment(aes(x = 1, xend = 2,
+                   y = ymax + 0.02, yend = ymax + 0.02),
+               linewidth = 0.8, color = "black") +
+  annotate("text",
+           x = 1.5,
+           y = ymax + 0.025,
+           label = annot_text,
+           size = 5,
+           fontface = "bold")
+
+
+ggsave("../../results/condition_plots/002._ggeffects_condition_diff.png", plot = p, width = 3, height = 3 , dpi = 300)
+
+print(beta)
+p
+
+```
+
+### Put them on the same axis! 
+```{r}
+summary_long <- subset_data %>%
+  select(Subject, Condition, appraisal_SELF, confidence) %>%
+  pivot_longer(
+    cols = c(appraisal_SELF, confidence),
+    names_to = "Measure",
+    values_to = "value"
+  ) %>%
+  mutate(
+    Measure = recode(Measure,
+      "confidence" = "conf",
+      "appraisal_SELF" = "self"
+    )
+  ) %>%
+  group_by(Subject, Condition, Measure) %>%
+  summarize(median_value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    x_var = paste(Condition, Measure, sep = "_")
+  )
+
+summary_long$x_var <- factor(
+  summary_long$x_var,
+  levels = c("cont_conf", "cont_self", "expt_conf", "expt_self")
+)
+
+
+p <- ggbetweenstats_custom(
+  data = summary_long,
+  x = x_var,
+  y = median_value,
+  centrality.plotting = FALSE,
+  point.args = list(alpha = 0),
+  test.value = FALSE)  
+    
+p <- p +
+  geom_line(
+    data = summary_long,
+    aes(
+      x = x_var,
+      y = median_value,
+      group = interaction(Subject, Condition)
+    ),
+    color = "darkgrey",
+    alpha = 0.3,
+    linewidth = 0.5
+  ) +
+
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    size = 3,
+    color = "black"
+  )
+
+p <- p +
+  geom_point(
+    data = summary_long,
+    aes(x = x_var, y = median_value, fill = Condition),
+position = position_jitter(width = 0.08, seed = 123),    shape = 21,
+    stroke = 0,
+    size = 2,
+    alpha = 0.6
+  ) +
+  scale_fill_manual(values = c("cont" = "#dc853f", "expt" = "#17685b"))+
+  theme_minimal() +
+  theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  text = element_text(family = "Helvetica Neue"),
+  axis.text.x = element_text(angle = 0, hjust = .5, size = 10),
+  axis.text.y = element_text(size = 10),
+  axis.title.y = element_text(size = 14),
+  axis.title.x = element_text(size = 14),
+  axis.ticks = element_line(color = "black"),
+  axis.ticks.length = unit(0.07, "cm"),
+  legend.position = "none",
+  panel.border = element_rect(fill = NA, color = "black"))
+
+p <- p + ylim(0,1)
+p
+ggsave("../../results/condition_plots/002._ggeffects_condition_diff_four_groups.png", plot = p, width = 4, height = 4 , dpi = 300)
+
+
+
+```
+
+
+#Whole brain model! reported in the main text!
+```{r}
+
+data_clean$neural_shift <- 1-(atanh(data_clean$R_Value))
+
+model3 <- lmer(neural_shift ~ Condition + (1|Subject) + (1|stim_file) + (1|Node_Number), data = data_clean)
+tab_model(model3)
+summary(model3)
+#whole brain is significant! 
+#R-value should be higher in the control condition as opposed to the experimental condition
+
+
+```
+
+
+```{r}
+data <- add_schaefer_network_labels(data_clean)
+formula <- "neural_shift ~ Condition"
+random_effects <- " + (1|Subject) + (1|stim_file) "
+result_df <- run_lmer_model(data, formula, random_effects,dir_local = 'condition_diffs')
+
+random_effects <- " + (1|Subject) + (1|stim_file) + (1|Node_Number)"
+result_df <- run_lmer_model_by_network(data, formula, random_effects,network_col = "Network_17N", output_folder = "model_outputs", dir_local = "17N")
+
+```
+
+
+# Confirming results stay as a function of filtering trials
+```{r}
+
+
+data <- add_schaefer_network_labels(data_clean)
+
+formula <- "neural_shift ~ Condition"
+random_effects <- " + (1|Subject) + (1|stim_file) "
+
+
+set.seed(123)
+n_iter <- 100
+a = 0
+condition_effects <- map_dfr(1:n_iter, function(i) {
+
+  # Sample 15 stim_files per Subject from Node 1
+  sampled_stims <- data %>%
+    filter(Node_Number == 1,
+           Condition == "expt") %>%
+    group_by(Subject) %>%
+    reframe(
+      stim_file = sample(stim_file, 15),
+      .groups = "drop"
+    )
+
+  #   - All cont trials
+  #   - Only selected expt stim_files (across ALL nodes)
+  sampled_df <- bind_rows(
+    filter(data, Condition == "cont"),
+    data %>%
+      filter(Condition == "expt") %>%
+      semi_join(sampled_stims,
+                by = c("Subject", "stim_file"))
+  )
+
+  run_lmer_model(
+    sampled_df,
+    formula = "neural_shift ~ Condition",
+    random_effects = " + (1|Subject) + (1|stim_file)",
+    output_folder = "resampled_matched_condition",
+    dir_local = paste0("iter_", i)
+  )
+  
+  r <- run_lmer_model_by_network(
+    sampled_df,
+    formula = "neural_shift ~ Condition",
+    random_effects = " + (1|Subject) + (1|stim_file) + (1|Node_Number)",
+    network_col = "Network_17N",
+    output_folder = "resampled_matched_condition_17N",
+    dir_local = paste0("iter_", i)
+  )
+
+  tibble(iteration = i)
+  
+})
+
+```
+

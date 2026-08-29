@@ -1,0 +1,263 @@
+---
+title: "1.2._R-behavioral_plots"
+output: html_document
+date: "2025-07-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include=FALSE}
+library(lme4)
+library(lmerTest)
+library(MASS)
+library(lmerTest)
+library(Rcpp)
+library(ggplot2)
+library(tidyverse)
+library(ggsignif)
+library(nlme)
+library(sjPlot)
+library(cowplot)
+library(ggside)
+library(sjPlot)
+
+library(patchwork)
+library(dplyr)
+library(ggh4x)
+library(ggeffects)
+
+
+```
+
+# MRI with the subsetted data to make sure the same subjects are used! 
+```{r}
+current_directory <- getwd()
+print(current_directory) 
+file_path <- paste(current_directory, '../../data/subject_by_node_Viewing1_Viewing2_subs_schaefer_rois.csv', sep = "/")
+data = read.csv(file_path)
+
+
+motion_file <- file.path(
+  current_directory,
+  "../../../MadLibs/code/analysis_fmri/_preparing_data/",
+  "all_subjects_img_trial_motion_summary.csv"
+)
+
+motion_summary <- read.csv(motion_file, stringsAsFactors = FALSE)
+
+# -------------------------------------------------------------------------
+# Initial cleaning and condition coding
+# -------------------------------------------------------------------------
+
+data <- data %>%
+  mutate(
+    Subject = as.character(Subject),
+    stim_file = as.character(stim_file),
+    Condition = factor(Condition, levels = c("cont", "expt"))
+  )
+
+# Contrast: control = -1, experimental = +1
+contrasts(data$Condition) <- matrix(
+  c(-1, 1),
+  ncol = 1,
+  dimnames = list(c("cont", "expt"), "Expt_vs_Cont")
+)
+
+# -------------------------------------------------------------------------
+# Remove high-motion trials
+# -------------------------------------------------------------------------
+
+library(MASS)
+library(dplyr)  # loaded last -> wins the masking
+
+motion_summary <- motion_summary %>%
+  mutate(
+    sub = as.character(sub),
+    img = as.character(img)
+  ) %>%
+  filter(high_motion %in% c(TRUE, "True", "TRUE", 1))
+
+# Construct matching keys using subject and image
+data <- data %>%
+  mutate(
+    img = as.character(stim_file),
+    motion_key = paste(Subject, img, sep = "_")
+  )
+
+high_motion_keys <- paste(
+  motion_summary$sub,
+  motion_summary$img,
+  sep = "_"
+)
+
+data <- data %>%
+  filter(!motion_key %in% high_motion_keys) %>%
+  dplyr::select(-motion_key)
+
+# -------------------------------------------------------------------------
+# Create behavioral variables and scale ratings to 0–1
+# -------------------------------------------------------------------------
+
+data <- data %>%
+  mutate(
+    appraisal_SELF = coalesce(
+      appraisal_SELF_cond1,
+      appraisal_SELF_cond2
+    ) / 100,
+    confidence = confidence / 100,
+    appraisal_OTHER = appraisal_OTHER_cond1 / 100
+  ) %>%
+  filter(
+    !is.na(appraisal_SELF),
+    !is.na(appraisal_OTHER),
+    !is.na(confidence),
+    !is.na(stim_file),
+    !is.na(Subject)
+  )
+
+# -------------------------------------------------------------------------
+# Select node 1
+# -------------------------------------------------------------------------
+
+node_data_clean <- data %>%
+  filter(Node_Number == 1) %>%
+  filter(
+    !is.na(appraisal_SELF),
+    !is.na(confidence),
+    !is.na(stim_file),
+    !is.na(Subject)
+  )
+
+# Number of included participants
+n_distinct(node_data_clean$Subject)
+
+# Experimental trials only
+data_experimental <- node_data_clean %>%
+  filter(Condition == "expt")
+
+
+data_experimental$OTHER.SELF <- data_experimental$appraisal_OTHER - data_experimental$appraisal_SELF
+data_experimental$semantic_dist <- 1 - data_experimental$cosine_sim_avg_inputs_BERT_context_miniLM_L6
+
+model <- lmer(OTHER.SELF ~ confidence*poly(semantic_dist,3) + (1|img) + (1|Subject), 
+                data = data_experimental)
+tab_model(model)
+```
+
+
+```{r}
+iteration= 'iteration_12_fMRI'
+data_experimental$semantic_dist_mc <- data_experimental$semantic_dist - mean(data_experimental$semantic_dist, na.rm = TRUE)
+
+
+  model <- lmer(OTHER.SELF ~ confidence*poly(semantic_dist,3) + (1|img) + + (1|Subject), 
+                  data = data_experimental)
+  tab_model(model)
+  model <- lmer(OTHER.SELF ~ confidence*semantic_dist + (1|img) + + (1|Subject), 
+                  data = data_experimental)
+  tab_model(model)  
+  
+  pred <- ggpredict(model, c("semantic_dist", "confidence [0.25, .5, .75]"))
+
+  p <- ggplot(pred, aes(x = x, y = predicted, 
+                         group = group, color = group, 
+                         fill = group, linetype = group)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
+    geom_line(size = 0.75) +
+  #scale_color_manual(values = c("#bbbcbc", "#888989", "black")) +
+  #scale_fill_manual(values =  c("#bbbcbc", "#888989", "black")) +
+  scale_color_manual(values = c("black", "black", "black")) +
+  scale_fill_manual(values =  c("black", "black", "black")) +
+    scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+    labs(y = NULL, x = NULL, title = NULL) +
+    theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p
+p <- p +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+
+  
+  print(p)
+
+  filename <- paste0('../../results/reinterpretation_plots/', iteration, '_confidence_semantic_plot_separated_lmer.png')
+  ggsave(filename, p, width = 3, height = 3, dpi = 300)
+  
+  cat("Saved plot to:", filename, "\n")
+
+
+```
+
+
+
+```{r}
+iteration= 'iteration_12_fMRI'
+
+
+  model <- lmer(OTHER.SELF ~ confidence*poly(semantic_dist,3) + (1|img) + + (1|Subject), 
+                  data = data_experimental)
+  summary(model)
+  model <- lmer(OTHER.SELF ~ confidence*semantic_dist + (1|img) + + (1|Subject), 
+                  data = data_experimental)
+  tab_model(model)  
+  
+  pred <- ggpredict(model, c("confidence","semantic_dist [0.25, .5, .75]"))
+
+  p <- ggplot(pred, aes(x = x, y = predicted, 
+                         group = group, color = group, 
+                         fill = group, linetype = group)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
+    geom_line(size = 0.75) +
+  #scale_color_manual(values = c("#bbbcbc", "#888989", "black")) +
+  #scale_fill_manual(values =  c("#bbbcbc", "#888989", "black")) +
+  scale_color_manual(values = c("black", "black", "black")) +
+  scale_fill_manual(values =  c("black", "black", "black")) +
+    scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
+    labs(y = NULL, x = NULL, title = NULL) +
+    theme_classic() +
+  theme(
+    aspect.ratio = 1,
+    text = element_text(family = "Helvetica Neue"),
+    axis.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = "none",
+            panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_blank(),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          linewidth = 0.5
+        ))
+p
+p <- p +
+  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
+
+  
+  print(p)
+
+  filename <- paste0('../../results/behavioral_plots/', iteration, '_confidence_semantic_plot_separated_lmer.png')
+  ggsave(filename, p, width = 3, height = 3, dpi = 300)
+  
+  cat("Saved plot to:", filename, "\n")
+
+
+```
+
