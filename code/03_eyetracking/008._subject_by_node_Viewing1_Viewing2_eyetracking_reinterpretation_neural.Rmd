@@ -43,47 +43,7 @@ data$Condition <- as.factor(data$Condition)
 condCond_over_Expt<- c(-1,1)
 contrasts(data$Condition) <- cbind(condCond_over_Expt) #should be lower in Cont
 
-### Let's drop some motion files    
-motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
 
-data$Subject <- as.character(data$Subject)
-data$img <- as.character(data$stim_file)
-motion_summary$Subject <- as.character(motion_summary$sub)
-motion_summary$img <- as.character(motion_summary$img)
-
-# Filter only the high motion trials
-#high_motion <- subset(motion_summary, high_motion == 'True') #.2
-high_motion <- subset(motion_summary, mean_motion > 0.5)
-
-# Create keys for matching
-data$key_sub <- paste(data$sub, data$img, sep = "_")
-high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
-
-data$bad <- data$key_sub %in% high_motion_keys
-data_clean <- subset(data, bad == FALSE)
-data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
-
-
-data <- data_clean
-
-
-trials_over_threshold <- motion_summary %>%
-  group_by(sub) %>%
-  dplyr::summarise(n_over_threshold = sum(median_motion > 0.5, na.rm = TRUE))
-
-trials_over_threshold %>%
-  ungroup() %>%
-  summarise(
-    median_n = median(n_over_threshold),
-    min_n = min(n_over_threshold),
-    max_n = max(n_over_threshold),
-    mean_n = mean(n_over_threshold),
-    sd_n = sd(n_over_threshold)
-  )
-
-trials_over_threshold %>%
-  arrange(desc(n_over_threshold)) %>%
-  print(n = Inf)
 
 
 eyetracking_data <-read.csv("/Volumes/FinnLab/datasets/madlibs-eyetracking/results/combined-eye-tracking_behavioral_results_fmri_QCed_screensize_merge_iticorr_mindur100.csv")

@@ -48,37 +48,6 @@ range(node1$semantic_distance, na.rm = TRUE)
 
 ```
 
-
-### Let's drop some motion files    
-```{r}
-motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
-
-# Ensure columns are characters for consistent matching
-data$Subject <- as.character(data$Subject)
-
-data$img <- as.character(data$stim_file)
-motion_summary$Subject <- as.character(motion_summary$sub)
-motion_summary$img <- as.character(motion_summary$img)
-
-# Filter only the high motion trials
-#high_motion <- subset(motion_summary, high_motion == 'True')
-high_motion <- subset(motion_summary, mean_motion > 0.5)
-
-# Create keys for matching
-data$key_sub <- paste(data$sub, data$img, sep = "_")
-high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
-
-data$bad <- data$key_sub %in% high_motion_keys
-
-data_clean <- subset(data, bad == FALSE)
-
-data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
-
-data <- data_clean
-
-```
-
-
 ```{r}
 data_experimental <- data[data$Condition == "expt", ]
 
@@ -174,6 +143,7 @@ random_effects <- " + (1|Subject) + (1|stim_file) "
 result_df <- run_lmer_model(data_experimental, formula, random_effects,dir_local = 'reinterpretation')
 
 #grabs it per network
+data_experimental <- add_schaefer_network_labels(data_experimental)
 random_effects <- " + (1|Subject) + (1|stim_file) + (1|Node_Number)"
 result_df <- run_lmer_model_by_network(data_experimental, formula, random_effects,network_col = "Network_17N", output_folder = "model_outputs", dir_local = "17N")
 
@@ -181,8 +151,6 @@ result_df <- run_lmer_model_by_network(data_experimental, formula, random_effect
 
 #Figure 1D
 ```{r}
-data_experimental <- add_schaefer_network_labels(data_experimental)
-
 subset_data <- data_experimental[data_experimental$Network_17N=='DefaultB',]
 model <- lmer(reinterpretation ~ neural_shift*semantic_distance + (1|stim_file) + (1|Subject) +(1|Node_Number), data=subset_data)
 tab_model(model)
@@ -230,9 +198,9 @@ ggsave("../../results/reinterpretation_plots/reinterpretation_DMNB.png", p, widt
 ```{r}
 library(marginaleffects)
 
-# Refit with polynomial semantic distance, to match your stated Methods
+# Refit with polynomial semantic distance
 model <- lmer(
-  reinterpretation ~ neural_shift * poly(semantic_distance, 3) +
+  reinterpretation ~ neural_shift * semantic_distance +
     (1|stim_file) + (1|Subject) + (1|Node_Number),
   data = subset_data
 )

@@ -56,32 +56,6 @@ data
 ```
 
 
-### Let's drop the high motion data! 
-```{r}
-motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
-
-# Ensure columns are characters for consistent matching
-data$Subject <- as.character(data$Subject)
-
-data$img <- as.character(data$stim_file)
-motion_summary$Subject <- as.character(motion_summary$sub)
-motion_summary$img <- as.character(motion_summary$img)
-
-# Filter only the high motion trials
-#high_motion <- subset(motion_summary, high_motion == 'True')
-high_motion <- subset(motion_summary, mean_motion > 0.5)
-
-# Create keys for matching
-data$key_sub <- paste(data$sub, data$img, sep = "_")
-high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
-
-data$bad <- data$key_sub %in% high_motion_keys
-
-data_clean <- subset(data, bad == FALSE)
-
-data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
-data <- data_clean
-```
 
 
 
@@ -508,9 +482,9 @@ ggsave("../../results/condition_plots/002._ggeffects_condition_diff_four_groups.
 #Whole brain model! reported in the main text!
 ```{r}
 
-data_clean$neural_shift <- 1-(atanh(data_clean$R_Value))
+data$neural_shift <- 1-(atanh(data$R_Value))
 
-model3 <- lmer(neural_shift ~ Condition + (1|Subject) + (1|stim_file) + (1|Node_Number), data = data_clean)
+model3 <- lmer(neural_shift ~ Condition + (1|Subject) + (1|stim_file) + (1|Node_Number), data = data)
 tab_model(model3)
 summary(model3)
 #whole brain is significant! 
@@ -521,7 +495,7 @@ summary(model3)
 
 
 ```{r}
-data <- add_schaefer_network_labels(data_clean)
+data <- add_schaefer_network_labels(data)
 formula <- "neural_shift ~ Condition"
 random_effects <- " + (1|Subject) + (1|stim_file) "
 result_df <- run_lmer_model(data, formula, random_effects,dir_local = 'condition_diffs')

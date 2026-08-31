@@ -45,27 +45,6 @@ motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/
 data$Subject <- as.character(data$Subject)
 
 data$img <- as.character(data$stim_file)
-motion_summary$Subject <- as.character(motion_summary$sub)
-motion_summary$img <- as.character(motion_summary$img)
-
-# Filter only the high motion trials
-#high_motion <- subset(motion_summary, high_motion == 'True')
-high_motion <- subset(motion_summary, mean_motion > 0.5)
-
-# Create keys for matching
-data$key_sub <- paste(data$sub, data$img, sep = "_")
-high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
-
-data$bad <- data$key_sub %in% high_motion_keys
-
-data_clean <- subset(data, bad == FALSE)
-
-data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
-data <- data_clean
-
-# -------------------------------------------------------------------------
-# Create behavioral variables and scale ratings to 0–1
-# -------------------------------------------------------------------------
 
 data <- data %>%
   mutate(
@@ -170,61 +149,4 @@ p <- p +
 
 
 ```
-
-
-
-```{r}
-iteration= 'iteration_12_fMRI'
-
-
-  model <- lmer(OTHER.SELF ~ confidence*poly(semantic_dist,3) + (1|img) + + (1|Subject), 
-                  data = data_experimental)
-  summary(model)
-  model <- lmer(OTHER.SELF ~ confidence*semantic_dist + (1|img) + + (1|Subject), 
-                  data = data_experimental)
-  tab_model(model)  
-  
-  pred <- ggpredict(model, c("confidence","semantic_dist [0.25, .5, .75]"))
-
-  p <- ggplot(pred, aes(x = x, y = predicted, 
-                         group = group, color = group, 
-                         fill = group, linetype = group)) +
-    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, color = NA) +
-    geom_line(size = 0.75) +
-  #scale_color_manual(values = c("#bbbcbc", "#888989", "black")) +
-  #scale_fill_manual(values =  c("#bbbcbc", "#888989", "black")) +
-  scale_color_manual(values = c("black", "black", "black")) +
-  scale_fill_manual(values =  c("black", "black", "black")) +
-    scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
-    labs(y = NULL, x = NULL, title = NULL) +
-    theme_classic() +
-  theme(
-    aspect.ratio = 1,
-    text = element_text(family = "Helvetica Neue"),
-    axis.title = element_text(size = 14),
-    axis.text.x = element_text(size = 12),
-    axis.text.y = element_text(size = 12),
-    legend.position = "none",
-            panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.line = element_blank(),
-        panel.border = element_rect(
-          colour = "black",
-          fill = NA,
-          linewidth = 0.5
-        ))
-p
-p <- p +
-  force_panelsizes(rows = unit(2.5, "in"), cols = unit(2.5, "in"))
-
-  
-  print(p)
-
-  filename <- paste0('../../results/behavioral_plots/', iteration, '_confidence_semantic_plot_separated_lmer.png')
-  ggsave(filename, p, width = 3, height = 3, dpi = 300)
-  
-  cat("Saved plot to:", filename, "\n")
-
-
-```
-
+s
