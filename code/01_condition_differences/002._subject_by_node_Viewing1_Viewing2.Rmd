@@ -62,25 +62,24 @@ motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/
 
 # Ensure columns are characters for consistent matching
 data$Subject <- as.character(data$Subject)
+
 data$img <- as.character(data$stim_file)
-motion_summary$sub <- as.character(motion_summary$sub)
+motion_summary$Subject <- as.character(motion_summary$sub)
 motion_summary$img <- as.character(motion_summary$img)
 
 # Filter only the high motion trials
-high_motion <- subset(motion_summary, high_motion == 'True')
+#high_motion <- subset(motion_summary, high_motion == 'True')
+high_motion <- subset(motion_summary, mean_motion > 0.5)
 
 # Create keys for matching
 data$key_sub <- paste(data$sub, data$img, sep = "_")
 high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
 
-# Mark as bad if either sub or other_sub_used has a high motion trial for the image
 data$bad <- data$key_sub %in% high_motion_keys
 
-# Drop bad rows
 data_clean <- subset(data, bad == FALSE)
 
 data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
-
 data <- data_clean
 ```
 

@@ -39,63 +39,29 @@ print(current_directory)
 file_path <- paste(current_directory, '../../data/subject_by_node_Viewing1_Viewing2_subs_schaefer_rois.csv', sep = "/")
 data = read.csv(file_path)
 
+motion_summary <- read.csv("../../../MadLibs/code/analysis_fmri/_preparing_data/all_subjects_img_trial_motion_summary.csv")
 
-motion_file <- file.path(
-  current_directory,
-  "../../../MadLibs/code/analysis_fmri/_preparing_data/",
-  "all_subjects_img_trial_motion_summary.csv"
-)
+# Ensure columns are characters for consistent matching
+data$Subject <- as.character(data$Subject)
 
-motion_summary <- read.csv(motion_file, stringsAsFactors = FALSE)
+data$img <- as.character(data$stim_file)
+motion_summary$Subject <- as.character(motion_summary$sub)
+motion_summary$img <- as.character(motion_summary$img)
 
-# -------------------------------------------------------------------------
-# Initial cleaning and condition coding
-# -------------------------------------------------------------------------
+# Filter only the high motion trials
+#high_motion <- subset(motion_summary, high_motion == 'True')
+high_motion <- subset(motion_summary, mean_motion > 0.5)
 
-data <- data %>%
-  mutate(
-    Subject = as.character(Subject),
-    stim_file = as.character(stim_file),
-    Condition = factor(Condition, levels = c("cont", "expt"))
-  )
+# Create keys for matching
+data$key_sub <- paste(data$sub, data$img, sep = "_")
+high_motion_keys <- paste(high_motion$sub, high_motion$img, sep = "_")
 
-# Contrast: control = -1, experimental = +1
-contrasts(data$Condition) <- matrix(
-  c(-1, 1),
-  ncol = 1,
-  dimnames = list(c("cont", "expt"), "Expt_vs_Cont")
-)
+data$bad <- data$key_sub %in% high_motion_keys
 
-# -------------------------------------------------------------------------
-# Remove high-motion trials
-# -------------------------------------------------------------------------
+data_clean <- subset(data, bad == FALSE)
 
-library(MASS)
-library(dplyr)  # loaded last -> wins the masking
-
-motion_summary <- motion_summary %>%
-  mutate(
-    sub = as.character(sub),
-    img = as.character(img)
-  ) %>%
-  filter(high_motion %in% c(TRUE, "True", "TRUE", 1))
-
-# Construct matching keys using subject and image
-data <- data %>%
-  mutate(
-    img = as.character(stim_file),
-    motion_key = paste(Subject, img, sep = "_")
-  )
-
-high_motion_keys <- paste(
-  motion_summary$sub,
-  motion_summary$img,
-  sep = "_"
-)
-
-data <- data %>%
-  filter(!motion_key %in% high_motion_keys) %>%
-  dplyr::select(-motion_key)
+data_clean <- data_clean[, !(names(data_clean) %in% c("key_sub", "bad"))]
+data <- data_clean
 
 # -------------------------------------------------------------------------
 # Create behavioral variables and scale ratings to 0–1
@@ -128,7 +94,8 @@ node_data_clean <- data %>%
     !is.na(appraisal_SELF),
     !is.na(confidence),
     !is.na(stim_file),
-    !is.na(Subject)
+    !is.na(Subject),
+    !is.na(cosine_sim_avg_inputs_BERT_context_miniLM_L6)
   )
 
 # Number of included participants

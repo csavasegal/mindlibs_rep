@@ -8,7 +8,7 @@ listed under Figure map below.
 - Scripts are numbered in pipeline order, and that order runs across folders: `001` builds
 the dataframe every later script depends on
 - If you need any additional information that is not included in this code directory, please feel free to reach out to **Clara Sava-Segal** at 📧 [csava@dartmouth.edu](mailto:csava@dartmouth.edu).
-Raw MR data will be added on OpenNeuro and modifications will be made through the review process
+Raw MR data will be added on OpenNeuro and updates will be made as a part of the review process
 
 ## Requirements
 
